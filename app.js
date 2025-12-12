@@ -69,7 +69,7 @@ function App() {
     const [modalData, setModalData] = useState(null);
 
     let lastCall = 0;
-    const rateLimitedFetch = async (fn, minGapMs = 1200) => {
+    const rateLimitedFetch = async (fn, minGapMs = 1500) => {
         const now = Date.now();
         const wait = Math.max(0, minGapMs - (now - lastCall));
         if (wait) {
@@ -79,8 +79,7 @@ function App() {
         return fn();
     };
 
-    const getBooksByTitle = (title, numBooks) => {
-
+    const getBooksByTitle = async (title, numBooks) => {
         const query = `
     {
       search(
@@ -92,33 +91,34 @@ function App() {
               results
           }
     }`;
-
-        return rateLimitedFetch(() =>
+      
+        try {
+          const res = await rateLimitedFetch(() =>
             fetch(proxiedUrl, {
-                headers: {
-                    'content-type': 'application/json',
-                    authorization: HARDCOVER_API_KEY,
-                },
-                body: JSON.stringify({ query }),
-                method: 'POST',
+              headers: { 'content-type': 'application/json', authorization: HARDCOVER_API_KEY },
+              body: JSON.stringify({ query }),
+              method: 'POST',
             })
-                .then((response) => response.json())
-                .then(({ data }) => {
-                    let searchedBooks = []
-                    data.search.results.hits.forEach(bookResult => {
-                        searchedBooks.push(bookResult.document)
-                    });
-                    searchedBooks.sort((a, b) => b.ratings_count - a.ratings_count)
-                    
-                    if (numBooks === 1)
-                        return searchedBooks[0];
-                    return searchedBooks.slice(0, numBooks)
-                })
-        );
-    }
+          );
+          if (!res.ok) {
+            console.error('Hardcover fetch failed', res.status, res.statusText);
+            return numBooks === 1 ? null : [];
+          }
+      
+          const { data } = await res.json();
+          const hits = data?.search?.results?.hits || [];
+          const searchedBooks = hits.map(h => h.document).sort((a, b) => (b.ratings_count || 0) - (a.ratings_count || 0));
+      
+          return numBooks === 1 ? searchedBooks[0] || null : searchedBooks.slice(0, numBooks);
+        } catch (err) {
+          console.error('Hardcover fetch error', err);
+          return numBooks === 1 ? null : [];
+        }
+      };
 
     const getBookInfo = (title) => {
         return getBooksByTitle(title, 1).then(book => {
+            if (!book) return { rating: 0, ratingPrecise: 0, coverUrl: '', author: 'Unknown', pages: null, ratingsCount: 0, title };
             if (book) {
                 const author =
                     (book.author_names && book.author_names[0]) ||
@@ -213,7 +213,7 @@ function App() {
         setShowAddModal(true);
     };
 
-    const updateBook = async ({ id, title, shelf, rating, isUserRated, previousShelf, color, height, width, coverUrl }) => {
+    const updateBook = async ({ id, title, shelf, rating, isUserRated, color, height, width, coverUrl }) => {
         const { rating: apiRating, coverUrl: apiCover } = await getBookInfo(title);
         let finalRating = rating;
         let finalIsUserRated = isUserRated;
@@ -234,8 +234,6 @@ function App() {
                 read: prev.read.filter(b => b.id !== id)
             };
 
-            // Keep other books intact even if previousShelf not provided
-            // Now add the updated book into target shelf (preserve appearance when provided)
             next[shelf] = [...next[shelf], {
                 id,
                 title,
@@ -271,7 +269,7 @@ function App() {
 
             <main className="shelvesContainer">
                 <BookShelf
-                    title="Wish List"
+                    title="Reading Wishlist"
                     books={shelves.wishlist}
                     showAddButton={true}
                     shelf={shelves[0]}
