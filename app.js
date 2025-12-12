@@ -69,6 +69,14 @@ function App() {
     const [modalData, setModalData] = useState(null);
 
     let lastCall = 0;
+    let latestRequestId = 0;
+    let lastErrorLog = 0;
+    const logErrorThrottled = (msg, gapMs = 2000) => {
+        const now = Date.now();
+        if (now - lastErrorLog < gapMs) return;
+        lastErrorLog = now;
+        console.warn(msg);
+    };
     const rateLimitedFetch = async (fn, minGapMs = 1500) => {
         const now = Date.now();
         const wait = Math.max(0, minGapMs - (now - lastCall));
@@ -80,6 +88,10 @@ function App() {
     };
 
     const getBooksByTitle = async (title, numBooks) => {
+        if (!title || !title.trim()) {
+            return numBooks === 1 ? null : [];
+        }
+        const requestId = ++latestRequestId;
         const query = `
     {
       search(
@@ -91,32 +103,41 @@ function App() {
               results
           }
     }`;
-      
+
         try {
-          const res = await rateLimitedFetch(() =>
-            fetch(proxiedUrl, {
-              headers: { 'content-type': 'application/json', authorization: HARDCOVER_API_KEY },
-              body: JSON.stringify({ query }),
-              method: 'POST',
-            })
-          );
-          if (!res.ok) {
-            console.error('Hardcover fetch failed', res.status, res.statusText);
-            return numBooks === 1 ? null : [];
-          }
-      
-          const { data } = await res.json();
-          const hits = data?.search?.results?.hits || [];
-          const searchedBooks = hits.map(h => h.document).sort((a, b) => (b.ratings_count || 0) - (a.ratings_count || 0));
-      
-          return numBooks === 1 ? searchedBooks[0] || null : searchedBooks.slice(0, numBooks);
+            const res = await rateLimitedFetch(() =>
+                fetch(proxiedUrl, {
+                    headers: { 'content-type': 'application/json', authorization: HARDCOVER_API_KEY },
+                    body: JSON.stringify({ query }),
+                    method: 'POST',
+                })
+            );
+            if (requestId !== latestRequestId) return numBooks === 1 ? null : [];
+            if (res.status === 429) {
+                logErrorThrottled('Hardcover rate limited (429). Try again later.');
+                return numBooks === 1 ? null : [];
+            }
+            if (!res.ok) {
+                logErrorThrottled(`Hardcover fetch failed ${res.status} ${res.statusText}`);
+                return numBooks === 1 ? null : [];
+            }
+
+            const { data } = await res.json();
+            if (requestId !== latestRequestId) return numBooks === 1 ? null : [];
+            const hits = data?.search?.results?.hits || [];
+            const searchedBooks = hits.map(h => h.document).sort((a, b) => (b.ratings_count || 0) - (a.ratings_count || 0));
+
+            return numBooks === 1 ? searchedBooks[0] || null : searchedBooks.slice(0, numBooks);
         } catch (err) {
-          console.error('Hardcover fetch error', err);
-          return numBooks === 1 ? null : [];
+            logErrorThrottled(`Hardcover fetch error: ${err?.message || err}`);
+            return numBooks === 1 ? null : [];
         }
-      };
+    };
 
     const getBookInfo = (title) => {
+        if (!title || !title.trim()) {
+            return Promise.resolve({ rating: 0, ratingPrecise: 0, coverUrl: '', author: 'Unknown', pages: null, ratingsCount: 0, title });
+        }
         return getBooksByTitle(title, 1).then(book => {
             if (!book) return { rating: 0, ratingPrecise: 0, coverUrl: '', author: 'Unknown', pages: null, ratingsCount: 0, title };
             if (book) {
@@ -454,7 +475,7 @@ function BookDetailsModal({ mode = 'add', initialData, onSave, onClose, fetchBoo
     const canUserRate = shelf === 'reading' || shelf === 'read';
 
     useEffect(() => {
-        if (!title || !fetchBookInfo) {
+        if (!title || !title.trim() || !fetchBookInfo) {
             setBookInfo(null);
             return;
         }
