@@ -7,15 +7,24 @@ const BOOK_COLORS = [
     '#7B241C', // Burgundy
     '#145A32', // Dark Green
     '#7D3C98', // Purple
-    '#B7950B', // Dark Gold
-    '#AF601A', // Burnt Orange
     '#154360', // Midnight Blue
     '#7E5109', // Dark Tan
     '#641E16', // Dark Red
     '#145A32', // Emerald
     '#512E5F', // Dark Purple
-    '#784212', // Brown
-    '#0E6655'  // Teal
+    '#0E6655', // Teal
+    '#1B4F72', // Oxford Blue
+    '#24527A', // Steel Blue
+    '#0F5E5A', // Deep Teal
+    '#2A7F62', // Sea Green
+    '#2F5233', // Hunter Green
+    '#3B6B4C', // Moss
+    '#4C3A51', // Mulberry
+    '#5B3B76', // Plum
+    '#6A4B8A', // Grape
+    '#2E4057', // Charcoal Blue
+    '#1F3B4D', // Slate Blue
+    '#3F2A56', // Indigo
 ];
 
 function pickColor() {
@@ -31,8 +40,7 @@ function App() {
     const [shelves, setShelves] = useState({
         wishlist: [],
         reading: [],
-        read: [],
-        suggested: []
+        read: []
     });
 
     useEffect(() => {
@@ -40,30 +48,39 @@ function App() {
         if (savedBooks) {
             setShelves(JSON.parse(savedBooks));
         }
-    }, []); // Empty array = runs ONCE when app loads
+    }, []);
 
-    // 2. SAVE to localStorage whenever shelves change
+
     useEffect(() => {
         localStorage.setItem('SavedBooks', JSON.stringify(shelves));
-    }, [shelves]); // Runs whenever shelves state changes
-    // console.log((shelves))
+    }, [shelves]);
+
 
     const HARDCOVER_API_KEY = 'Bearer eyJhbGciOiJIUzI1NiJ9.eyJpc3MiOiJIYXJkY292ZXIiLCJ2ZXJzaW9uIjoiOCIsImp0aSI6ImYwMzNkMzc2LTc5ZDUtNDkzNS05YTYzLTQ1OTFjOWZiZDM3MCIsImFwcGxpY2F0aW9uSWQiOjIsInN1YiI6IjU1OTczIiwiYXVkIjoiMSIsImlkIjoiNTU5NzMiLCJsb2dnZWRJbiI6dHJ1ZSwiaWF0IjoxNzYzODc3NDkxLCJleHAiOjE3OTU0MTM0OTEsImh0dHBzOi8vaGFzdXJhLmlvL2p3dC9jbGFpbXMiOnsieC1oYXN1cmEtYWxsb3dlZC1yb2xlcyI6WyJ1c2VyIl0sIngtaGFzdXJhLWRlZmF1bHQtcm9sZSI6InVzZXIiLCJ4LWhhc3VyYS1yb2xlIjoidXNlciIsIlgtaGFzdXJhLXVzZXItaWQiOiI1NTk3MyJ9LCJ1c2VyIjp7ImlkIjo1NTk3M319.VtISJ9upyqw3hD297WBN63ZxFxqdVF6Z-oVWuG5P3HY';
 
 
-    // Proxied, corrected request
+
     const proxyUrl = 'https://corsproxy.io/?';
     const hardcoverApiUrl = 'https://api.hardcover.app/v1/graphql';
     const proxiedUrl = proxyUrl + encodeURIComponent(hardcoverApiUrl);
 
-    const bookHeight = 500;
-    const [theme, setTheme] = useState('day');
     const [showAddModal, setShowAddModal] = useState(false);
-    const [modalMode, setModalMode] = useState('add'); // 'add' | 'edit'
-    const [modalData, setModalData] = useState(null);  // Data passed into modal
-    // const books = [1, 2, 3, 4, 5, 6, 7]
-    const getBooksByTitle = (title) => {
-        
+    const [modalMode, setModalMode] = useState('add');
+    const [modalData, setModalData] = useState(null);
+
+    let lastCall = 0;
+    const rateLimitedFetch = async (fn, minGapMs = 1200) => {
+        const now = Date.now();
+        const wait = Math.max(0, minGapMs - (now - lastCall));
+        if (wait) {
+            await new Promise(res => setTimeout(res, wait));
+        }
+        lastCall = Date.now();
+        return fn();
+    };
+
+    const getBooksByTitle = (title, numBooks) => {
+
         const query = `
     {
       search(
@@ -76,45 +93,67 @@ function App() {
           }
     }`;
 
-        return fetch(proxiedUrl, {  // ✅ Add 'return'
-            headers: {
-                'content-type': 'application/json',
-                authorization: HARDCOVER_API_KEY,
-            },
-            body: JSON.stringify({ query }),
-            method: 'POST',
-        })
-            .then((response) => response.json())
-            .then(({ data }) => {
-                let searchedBooks = []
-                data.search.results.hits.forEach(bookResult => {
-                    searchedBooks.push(bookResult.document)
-                });
-                searchedBooks.sort((a, b) => b.ratings_count - a.ratings_count)
-                console.log(searchedBooks)
-                return searchedBooks[0];  // ✅ Return the array
-            });
+        return rateLimitedFetch(() =>
+            fetch(proxiedUrl, {
+                headers: {
+                    'content-type': 'application/json',
+                    authorization: HARDCOVER_API_KEY,
+                },
+                body: JSON.stringify({ query }),
+                method: 'POST',
+            })
+                .then((response) => response.json())
+                .then(({ data }) => {
+                    let searchedBooks = []
+                    data.search.results.hits.forEach(bookResult => {
+                        searchedBooks.push(bookResult.document)
+                    });
+                    searchedBooks.sort((a, b) => b.ratings_count - a.ratings_count)
+                    
+                    if (numBooks === 1)
+                        return searchedBooks[0];
+                    return searchedBooks.slice(0, numBooks)
+                })
+        );
     }
 
     const getBookInfo = (title) => {
-        return getBooksByTitle(title).then(book => {  // returns document
+        return getBooksByTitle(title, 1).then(book => {
             if (book) {
+                const author =
+                    (book.author_names && book.author_names[0]) ||
+                    (book.authors && book.authors[0]?.name) ||
+                    book.primary_author ||
+                    'Unknown';
+                const pages =
+                    book.page_count ||
+                    book.pages ||
+                    book.num_pages ||
+                    null;
+
                 return {
                     rating: book.rating,
-                    coverUrl: book.image.url
+                    ratingPrecise: book.rating,
+                    coverUrl: book.image?.url || '',
+                    author,
+                    pages,
+                    ratingsCount: book.ratings_count || 0,
+                    title: book.title,
                 };
             }
-            return { rating: 0, coverUrl: '' };
+            return { rating: 0, ratingPrecise: 0, coverUrl: '', author: 'Unknown', pages: null, ratingsCount: 0, title };
         });
     }
-    
+
+
+
     const addBook = async ({ title, shelf, rating, isUserRated }) => {
         const { rating: apiRating, coverUrl: apiCover } = await getBookInfo(title);
         let finalRating = rating;
         let finalIsUserRated = isUserRated;
         const finalCoverUrl = apiCover || '';
 
-        if (shelf === 'wishlist' || shelf === 'suggested') {
+        if (shelf === 'wishlist') {
             finalRating = Math.round(apiRating);
             finalIsUserRated = false;
         } else {
@@ -127,7 +166,7 @@ function App() {
             title,
             rating: finalRating,
             color: pickColor(),
-            height: 200 + Math.floor(Math.random() * 150),
+            height: 300 + Math.floor(Math.random() * 100),
             width: 60 + Math.floor(Math.random() * 30),
             shelf,
             isUserRated: finalIsUserRated,
@@ -158,7 +197,6 @@ function App() {
     };
 
     const openEditModal = (book) => {
-        if (book.shelf === 'suggested') return; // view-only
         setModalMode('edit');
         setModalData({
             id: book.id,
@@ -181,7 +219,7 @@ function App() {
         let finalIsUserRated = isUserRated;
         const finalCoverUrl = apiCover || coverUrl || '';
 
-        if (shelf === 'wishlist' || shelf === 'suggested') {
+        if (shelf === 'wishlist') {
             finalRating = Math.round(apiRating);
             finalIsUserRated = false;
         } else {
@@ -193,8 +231,7 @@ function App() {
             const next = {
                 wishlist: prev.wishlist.filter(b => b.id !== id),
                 reading: prev.reading.filter(b => b.id !== id),
-                read: prev.read.filter(b => b.id !== id),
-                suggested: prev.suggested.filter(b => b.id !== id),
+                read: prev.read.filter(b => b.id !== id)
             };
 
             // Keep other books intact even if previousShelf not provided
@@ -229,7 +266,7 @@ function App() {
     return (
         <div className="app">
             <header className="header">
-                <h1>My Book Tracker</h1>
+                <h1>Virtual Bookshelf</h1>
             </header>
 
             <main className="shelvesContainer">
@@ -260,23 +297,16 @@ function App() {
                     onAddClick={() => openAddModal('read')}
                     onEdit={openEditModal}
                 />
-                <BookShelf
-                    title="Suggested Books"
-                    books={shelves.suggested}
-                    shelf={shelves[3]}
-                    onDelete={deleteBook}
-                    showAddButton={false}  // No add button for suggested
-                    onEdit={openEditModal}
-                />
             </main>
 
-            {/* Render modal if showAddModal is true */}
+
             {showAddModal && (
                 <BookDetailsModal
                     mode={modalMode}
                     initialData={modalData}
                     onSave={handleModalSave}
                     onClose={() => { setShowAddModal(false); setModalData(null); }}
+                    fetchBookInfo={getBookInfo}
                 />
             )}
         </div>
@@ -284,6 +314,7 @@ function App() {
 }
 
 function BookShelf({ title, books, showAddButton, onAddClick, onDelete, onEdit }) {
+
     return (
         <div className="shelfContainer">
             <div className="shelfHeader">
@@ -313,52 +344,56 @@ function BookShelf({ title, books, showAddButton, onAddClick, onDelete, onEdit }
 
 
 function Book({ book, onClick, onDelete, shelf }) {
+
     return (
-        <div 
+        <div
             className="book"
-            style={{ 
+            style={{
                 backgroundColor: book.color,
                 height: `${book.height}px`,
-                width: `${book.width}px`  // ✅ Dynamic width
+                width: `${book.width}px`
             }}
             onClick={() => onClick?.(book)}
         >
-            <button 
+            <button
                 className="delete-btn"
-            
+
                 onClick={(e) => { e.stopPropagation(); onDelete(book.id, shelf); }}
                 title="Delete book"
             >
                 ×
             </button>
 
-            
+
 
             <div className="book-title-vertical">
                 {book.title}
             </div>
 
             <div className="book-rating">
-                <StarRating rating={book.rating} isUserRated={book.isUserRated} />
+                <StarRating rating={book.rating} isUserRated={book.isUserRated} flipped />
             </div>
         </div>
     );
 }
 
-function StarRating({ rating, interactive = false, onRate, isUserRated = false }) {
+function StarRating({ rating, interactive = false, onRate, isUserRated = false, flipped = false }) {
     const totalStars = 5;
-    
+    const starFlip = flipped ? "flippedStar" : undefined;
+
     return (
         <div className="star-rating">
             {Array.from({ length: totalStars }, (_, index) => {
                 const starNumber = index + 1;
-                
+
+
                 if (rating >= starNumber) {
                     return (
                         <span
-                            className={`star ${isUserRated ? 'star-user' : 'star-api'}`}
+                            className={`star ${isUserRated ? 'star-user' : 'star-api'} ${starFlip}`}
                             key={index}
                             onClick={interactive ? () => onRate?.(starNumber) : undefined}
+
                         >
                             ★
                         </span>
@@ -366,7 +401,7 @@ function StarRating({ rating, interactive = false, onRate, isUserRated = false }
                 } else {
                     return (
                         <span
-                            className={`star ${isUserRated ? 'star-user' : 'star-api'}`}
+                            className={`star ${isUserRated ? 'star-user' : 'star-api'} ${starFlip}`}
                             key={index}
                             onClick={interactive ? () => onRate?.(starNumber) : undefined}
                         >
@@ -379,12 +414,14 @@ function StarRating({ rating, interactive = false, onRate, isUserRated = false }
     );
 }
 
-function BookDetailsModal({ mode = 'add', initialData, onSave, onClose }) {
+function BookDetailsModal({ mode = 'add', initialData, onSave, onClose, fetchBookInfo }) {
     const [title, setTitle] = useState(initialData?.title || '');
     const [shelf, setShelf] = useState(initialData?.shelf || 'wishlist');
     const [rating, setRating] = useState(initialData?.rating || 0);
     const [isUserRated, setIsUserRated] = useState(initialData?.isUserRated || false);
     const [isSaving, setIsSaving] = useState(false);
+    const [bookInfo, setBookInfo] = useState(null);
+    const [infoLoading, setInfoLoading] = useState(false);
 
     const handleSubmit = (e) => {
         e.preventDefault();
@@ -409,7 +446,7 @@ function BookDetailsModal({ mode = 'add', initialData, onSave, onClose }) {
 
     const handleShelfChange = (value) => {
         setShelf(value);
-        if (value === 'wishlist' || value === 'suggested') {
+        if (value === 'wishlist') {
             setIsUserRated(false);
         } else {
             setIsUserRated(true);
@@ -418,72 +455,115 @@ function BookDetailsModal({ mode = 'add', initialData, onSave, onClose }) {
 
     const canUserRate = shelf === 'reading' || shelf === 'read';
 
+    useEffect(() => {
+        if (!title || !fetchBookInfo) {
+            setBookInfo(null);
+            return;
+        }
+        let active = true;
+        setInfoLoading(true);
+        fetchBookInfo(title.trim())
+            .then(info => {
+                if (active) setBookInfo(info);
+            })
+            .finally(() => {
+                if (active) setInfoLoading(false);
+            });
+        return () => { active = false; };
+    }, [title, fetchBookInfo]);
+
     return (
         <div className="modalOverlay" onClick={onClose}>
             <div className="modalContent" onClick={(e) => e.stopPropagation()}>
                 <h2>{mode === 'add' ? 'Add New Book' : 'Edit Book'}</h2>
 
-                <form onSubmit={handleSubmit}>
-                    <input
-                        type="text"
-                        placeholder="Book title..."
-                        value={title}
-                        onChange={(e) => setTitle(e.target.value)}
-                        className="bookInput"
-                        autoFocus
-                        disabled={mode === 'edit'}
-                        readOnly={mode === 'edit'}
-                    />
-
-                    <div className="field">
-                        <label htmlFor="shelf-select">Shelf</label>
-                        <select
-                            id="shelf-select"
-                            value={shelf}
-                            onChange={(e) => handleShelfChange(e.target.value)}
-                        >
-                            <option value="wishlist">Wish List</option>
-                            <option value="reading">Currently Reading</option>
-                            <option value="read">Already Read</option>
-                        </select>
-                    </div>
-                    {/* <img className="field" src={coverUrl}/> */}
-
-                    <div className="field">
-                        <label>User Rating (only for Reading/Read)</label>
-                        <StarRating
-                            rating={rating}
-                            interactive={canUserRate}
-                            isUserRated={isUserRated}
-                            onRate={(value) => {
-                                if (canUserRate) {
-                                    setRating(value);
-                                    setIsUserRated(true);
-                                }
-                            }}
+                <div className="book-modal-pages">
+                    <form className="book-modal-page left-page" onSubmit={handleSubmit}>
+                        <input
+                            type="text"
+                            placeholder="Book title..."
+                            value={title}
+                            onChange={(e) => setTitle(e.target.value)}
+                            className="bookInput"
+                            autoFocus
+                            disabled={mode === 'edit'}
+                            readOnly={mode === 'edit'}
                         />
-                        {!canUserRate && (
-                            <p className="helper-text">
-                                {shelf === 'wishlist' || shelf === 'suggested'
-                                    ? 'API rating will be used.'
-                                    : ''}
-                            </p>
+
+                        <div className="field">
+                            <label htmlFor="shelf-select">Shelf</label>
+                            <select
+                                id="shelf-select"
+                                value={shelf}
+                                onChange={(e) => handleShelfChange(e.target.value)}
+                            >
+                                <option value="wishlist">Wish List</option>
+                                <option value="reading">Currently Reading</option>
+                                <option value="read">Already Read</option>
+                            </select>
+                        </div>
+
+                        <div className="field">
+                            <label>User Rating (only for Reading/Read)</label>
+                            <StarRating
+                                rating={rating}
+                                interactive={canUserRate}
+                                isUserRated={isUserRated}
+                                onRate={(value) => {
+                                    if (canUserRate) {
+                                        setRating(value);
+                                        setIsUserRated(true);
+                                    }
+                                }}
+                            />
+                            {!canUserRate && (
+                                <p className="helper-text">
+                                    {shelf === 'wishlist' || shelf === 'suggested'
+                                        ? 'Hardcover API rating will be used.'
+                                        : ''}
+                                </p>
+                            )}
+                        </div>
+
+                        <div className="modalButtons">
+                            <button type="submit" className="submitButton" disabled={isSaving}>
+                                {mode === 'add' ? 'Save Book' : 'Save Changes'}
+                            </button>
+                            <button
+                                type="button"
+                                className="cancelButton"
+                                onClick={onClose}
+                            >
+                                Cancel
+                            </button>
+                        </div>
+                    </form>
+
+                    <div className="book-modal-page right-page book-info-panel">
+                        <h3>Book Info</h3>
+                        {infoLoading && <p className="helper-text">Loading book details...</p>}
+                        {!infoLoading && bookInfo && (
+                            <ul>
+                                {bookInfo.coverUrl && (
+                                    <li>
+                                        <img
+                                            className="book-info-cover"
+                                            src={bookInfo.coverUrl}
+                                            alt={bookInfo.title || 'Book cover'}
+                                        />
+                                    </li>
+                                )}
+                                <li><strong>Author:</strong> {bookInfo.author || 'Unknown'}</li>
+                                <li><strong>Pages:</strong> {bookInfo.pages ? bookInfo.pages : 'Unknown'}</li>
+                                <li><strong>Hardcover Users Rating:</strong> {bookInfo.ratingPrecise != null ? bookInfo.ratingPrecise.toFixed(2) : 'Not Rated'}</li>
+                                {bookInfo.ratingsCount != null && <li><strong>Ratings Count:</strong> {bookInfo.ratingsCount}</li>}
+                            </ul>
+                        )}
+                        {!infoLoading && !bookInfo && (
+                            <p className="helper-text">Enter a title to load details.</p>
                         )}
                     </div>
-
-                    <div className="modalButtons">
-                        <button type="submit" className="submitButton" disabled={isSaving}>
-                            {mode === 'add' ? 'Save Book' : 'Save Changes'}
-                        </button>
-                        <button
-                            type="button"
-                            className="cancelButton"
-                            onClick={onClose}
-                        >
-                            Cancel
-                        </button>
-                    </div>
-                </form>
+                </div>
             </div>
         </div>
     );
@@ -493,7 +573,6 @@ function DeleteButton(onClickDelete) {
 
 }
 
-// Render the app
 const root = ReactDOM.createRoot(document.getElementById('root'));
 root.render(<App />);
 
